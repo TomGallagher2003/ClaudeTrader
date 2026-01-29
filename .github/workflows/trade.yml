@@ -1,0 +1,41 @@
+name: Daily Paper Trade
+
+on:
+  schedule:
+    # Run every weekday at 14:30 UTC (9:30 AM EST - market open)
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run trader
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python trader.py
+
+      - name: Commit trade log
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add trades.csv
+          git diff --staged --quiet || git commit -m "📈 Trade log update $(date -u +%Y-%m-%d)"
+          git push
