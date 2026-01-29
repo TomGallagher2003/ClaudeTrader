@@ -20,6 +20,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -105,7 +106,8 @@ class MarketData:
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
             start=start,
-            end=end
+            end=end,
+            feed=DataFeed.IEX
         )
 
         bars = self.client.get_stock_bars(request)
