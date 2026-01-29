@@ -597,9 +597,29 @@ def run_trading_cycle():
     logger.info("=" * 60)
 
 
+def is_market_open() -> bool:
+    """Check if the market is currently open using Alpaca's clock API."""
+    try:
+        client = TradingClient(
+            api_key=os.getenv('ALPACA_API_KEY'),
+            secret_key=os.getenv('ALPACA_SECRET_KEY'),
+            paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
+        )
+        clock = client.get_clock()
+        return clock.is_open
+    except Exception as e:
+        logger.error(f"Failed to check market status: {e}")
+        return False
+
+
 def main():
     """Main entry point."""
     logger.info("ClaudeTrader initialized")
+
+    if not is_market_open():
+        logger.warning("Market is not open. Skipping trading cycle.")
+        return
+
     run_trading_cycle()
 
 
