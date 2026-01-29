@@ -170,9 +170,10 @@ class StrategyFilters:
         self.config = config
         self.data = market_data
 
-    def check_regime_mode(self) -> TradingMode:
+    def check_regime_mode(self) -> tuple[TradingMode, float]:
         """
         Check SPY 5-day trend to determine market regime.
+        Returns (TradingMode, spy_return).
         Returns DEFENSIVE if SPY is down >2% over 5 days.
         """
         spy_return = self.data.calculate_return(
@@ -184,10 +185,10 @@ class StrategyFilters:
 
         if spy_return < self.config.regime_threshold:
             logger.warning(f"DEFENSIVE MODE: SPY down {spy_return:.2%} over {self.config.regime_lookback_days} days")
-            return TradingMode.DEFENSIVE
+            return TradingMode.DEFENSIVE, spy_return
 
         logger.info("OFFENSIVE MODE: Market regime favorable")
-        return TradingMode.OFFENSIVE
+        return TradingMode.OFFENSIVE, spy_return
 
     def check_relative_strength(self, symbol: str) -> tuple[bool, float, float]:
         """
@@ -458,6 +459,116 @@ class TradeExecutor:
 
 
 # =============================================================================
+# JOB DECISION LOGGING
+# =============================================================================
+
+class JobDecisionLogger:
+    """
+    Logs all decisions from a single trading job to a JSON file.
+    Overwrites on each run so you always see the most recent job's decisions.
+    """
+
+    def __init__(self):
+        self.job_start = datetime.now().isoformat()
+        self.regime_mode = None
+        self.spy_return = None
+        self.decisions = []
+        self.trades_executed = 0
+
+    def set_regime(self, mode: TradingMode, spy_return: float):
+        """Record the market regime for this job."""
+        self.regime_mode = mode.value
+        self.spy_return = spy_return
+
+    def log_decision(
+        self,
+        symbol: str,
+        current_price: float,
+        ai_recommendation: str,
+        ai_confidence: str,
+        ai_rationale: str,
+        final_action: str,
+        block_reason: str = None,
+        is_outperforming: bool = None,
+        stock_return: float = None,
+        benchmark_return: float = None,
+        atr_percent: float = None,
+        position_multiplier: float = None,
+        qty: int = 0,
+        order_id: str = None
+    ):
+        """Log a decision for a single symbol."""
+        trade_executed = order_id is not None and qty > 0
+
+        decision = {
+            "symbol": symbol,
+            "price": round(current_price, 2),
+            "ai_recommendation": ai_recommendation,
+            "ai_confidence": ai_confidence,
+            "ai_rationale": ai_rationale,
+            "final_action": final_action,
+            "trade_executed": trade_executed,
+            "block_reason": block_reason,
+            "metrics": {
+                "relative_strength": "OUTPERFORMING" if is_outperforming else "UNDERPERFORMING",
+                "stock_14d_return": f"{stock_return:.2%}" if stock_return is not None else None,
+                "benchmark_14d_return": f"{benchmark_return:.2%}" if benchmark_return is not None else None,
+                "atr_percent": f"{atr_percent:.2%}" if atr_percent is not None else None,
+                "position_multiplier": position_multiplier
+            },
+            "execution": {
+                "qty": qty,
+                "order_id": order_id
+            } if trade_executed else None
+        }
+
+        self.decisions.append(decision)
+
+        if trade_executed:
+            self.trades_executed += 1
+
+    def write_log(self, filepath: str = "latest_decisions.json"):
+        """Write the job decisions to a JSON file."""
+        # Calculate summary
+        actions = [d["final_action"] for d in self.decisions]
+        trades = [d for d in self.decisions if d["trade_executed"]]
+
+        summary = {
+            "total_symbols_analyzed": len(self.decisions),
+            "buys": actions.count("BUY"),
+            "sells": actions.count("SELL"),
+            "holds": actions.count("HOLD"),
+            "trades_executed": self.trades_executed,
+            "executed_trades": [
+                {
+                    "symbol": t["symbol"],
+                    "action": t["final_action"],
+                    "qty": t["execution"]["qty"],
+                    "price": t["price"]
+                }
+                for t in trades
+            ]
+        }
+
+        job_log = {
+            "job_timestamp": self.job_start,
+            "job_completed": datetime.now().isoformat(),
+            "market_regime": {
+                "mode": self.regime_mode,
+                "spy_5d_return": f"{self.spy_return:.2%}" if self.spy_return is not None else None
+            },
+            "summary": summary,
+            "decisions": self.decisions
+        }
+
+        with open(filepath, 'w') as f:
+            json.dump(job_log, f, indent=2)
+
+        logger.info(f"Job decisions written to {filepath}")
+        logger.info(f"Summary: {summary['trades_executed']} trades executed out of {summary['total_symbols_analyzed']} symbols analyzed")
+
+
+# =============================================================================
 # TRADE LOGGING
 # =============================================================================
 
@@ -514,9 +625,11 @@ def run_trading_cycle():
     filters = StrategyFilters(config, market_data)
     analyzer = AIAnalyzer(config)
     executor = TradeExecutor(config)
+    job_logger = JobDecisionLogger()
 
     # Step 1: Check market regime
-    regime_mode = filters.check_regime_mode()
+    regime_mode, spy_return = filters.check_regime_mode()
+    job_logger.set_regime(regime_mode, spy_return)
 
     # Step 2: Process each symbol
     for symbol in config.symbols:
@@ -550,16 +663,19 @@ def run_trading_cycle():
 
             # Apply strategy filters
             final_action = recommendation
+            block_reason = None
 
             # Filter 1: Block BUYs in defensive mode
             if regime_mode == TradingMode.DEFENSIVE and recommendation == "BUY":
                 logger.warning(f"BUY blocked for {symbol}: DEFENSIVE mode active")
                 final_action = "HOLD"
+                block_reason = "DEFENSIVE mode - market down >2% over 5 days"
 
             # Filter 2: Block BUYs if underperforming benchmark
             if not is_outperforming and recommendation == "BUY":
                 logger.warning(f"BUY blocked for {symbol}: Underperforming {config.benchmark}")
                 final_action = "HOLD"
+                block_reason = f"Underperforming {config.benchmark} benchmark"
 
             # Execute trade
             order_id = None
@@ -575,7 +691,7 @@ def run_trading_cycle():
                     qty = int(positions[symbol]["qty"])
                     order_id = executor.execute_sell(symbol)
 
-            # Log trade
+            # Log trade to CSV
             log_trade(
                 symbol=symbol,
                 action=final_action,
@@ -590,9 +706,30 @@ def run_trading_cycle():
                 order_id=order_id
             )
 
+            # Log decision to job log
+            job_logger.log_decision(
+                symbol=symbol,
+                current_price=current_price,
+                ai_recommendation=recommendation,
+                ai_confidence=confidence,
+                ai_rationale=rationale,
+                final_action=final_action,
+                block_reason=block_reason,
+                is_outperforming=is_outperforming,
+                stock_return=stock_return,
+                benchmark_return=benchmark_return,
+                atr_percent=atr_percent,
+                position_multiplier=position_multiplier,
+                qty=qty,
+                order_id=order_id
+            )
+
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             continue
+
+    # Write job decisions log
+    job_logger.write_log()
 
     logger.info("=" * 60)
     logger.info("Trading cycle complete")

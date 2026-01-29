@@ -90,7 +90,7 @@ class TestRegimeDetection:
         # SPY down 3% over 5 days
         mock_market_data.calculate_return.return_value = -0.03
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.DEFENSIVE
         mock_market_data.calculate_return.assert_called_once_with("SPY", 5)
@@ -100,7 +100,7 @@ class TestRegimeDetection:
         # SPY up 1% over 5 days
         mock_market_data.calculate_return.return_value = 0.01
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.OFFENSIVE
 
@@ -109,7 +109,7 @@ class TestRegimeDetection:
         # SPY exactly at threshold
         mock_market_data.calculate_return.return_value = -0.02
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.OFFENSIVE
 
@@ -118,7 +118,7 @@ class TestRegimeDetection:
         # SPY just below threshold
         mock_market_data.calculate_return.return_value = -0.0201
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.DEFENSIVE
 
@@ -260,7 +260,7 @@ class TestStrategyIntegration:
         # Setup: Defensive mode (SPY down 3%)
         mock_market_data.calculate_return.return_value = -0.03
 
-        mode = filters.check_regime_mode()
+        mode, _ = filters.check_regime_mode()
 
         assert mode == TradingMode.DEFENSIVE
         # In actual execution, BUY would be converted to HOLD
@@ -290,7 +290,7 @@ class TestStrategyIntegration:
         mock_market_data.calculate_atr.return_value = (15.0, 0.07)  # High volatility
 
         # Check all filters
-        mode = filters.check_regime_mode()
+        mode, _ = filters.check_regime_mode()
         is_outperforming, _, _ = filters.check_relative_strength("NVDA")
         multiplier, _ = filters.calculate_position_multiplier("NVDA")
 
@@ -310,7 +310,7 @@ class TestEdgeCases:
         """Test handling of zero returns."""
         mock_market_data.calculate_return.return_value = 0.0
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.OFFENSIVE
 
@@ -318,7 +318,7 @@ class TestEdgeCases:
         """Test handling of large positive returns."""
         mock_market_data.calculate_return.return_value = 0.50  # 50% gain
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.OFFENSIVE
 
@@ -326,6 +326,6 @@ class TestEdgeCases:
         """Test handling of large negative returns (crash)."""
         mock_market_data.calculate_return.return_value = -0.20  # 20% crash
 
-        mode = strategy_filters.check_regime_mode()
+        mode, _ = strategy_filters.check_regime_mode()
 
         assert mode == TradingMode.DEFENSIVE
