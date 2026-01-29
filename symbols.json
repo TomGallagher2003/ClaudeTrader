@@ -1,0 +1,14 @@
+{
+  "symbols": [
+    "NVDA",
+    "AVGO",
+    "ANET",
+    "LLY",
+    "PLTR",
+    "MSFT",
+    "AXON"
+  ],
+  "benchmark": "QQQ",
+  "regime_indicator": "SPY",
+  "description": "High-conviction 2026 portfolio optimized for AI infrastructure, healthcare innovation, and defense tech themes"
+}
