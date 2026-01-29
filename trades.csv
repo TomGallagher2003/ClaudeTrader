@@ -1,1 +1,1 @@
-timestamp,symbol,decision,result
+timestamp,symbol,action,shares,price,prev_alloc_pct,target_alloc_pct,equity,reasoning,result
