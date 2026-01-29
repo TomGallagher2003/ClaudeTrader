@@ -1,0 +1,33 @@
+name: Run Trading Bot
+
+on:
+  schedule:
+    # 9:30 AM ET - accounts for both EST (14:30 UTC) and EDT (13:30 UTC)
+    - cron: '30 13 * * 1-5'  # 9:30 AM EDT (summer)
+    - cron: '30 14 * * 1-5'  # 9:30 AM EST (winter)
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run trading bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python trader.py
