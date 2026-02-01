@@ -139,7 +139,14 @@ class MarketData:
         Calculate Average True Range over specified period.
         Returns (ATR value, ATR as percentage of current price).
         """
-        bars = self.get_historical_bars(symbol, period + 1)
+        # Fetch extra data to ensure we have enough after dropping NaN
+        bars = self.get_historical_bars(symbol, period + 10)
+
+        if len(bars) < period:
+            logger.warning(f"Insufficient data for ATR calculation on {symbol}: {len(bars)} bars < {period} required")
+            # Return reasonable defaults to avoid NaN
+            current_price = float(bars['close'].iloc[-1])
+            return 0.0, 0.0
 
         high = bars['high']
         low = bars['low']
@@ -147,11 +154,21 @@ class MarketData:
         prev_close = close.shift(1)
 
         tr1 = high - low
-        tr2 = abs(high - prev_close)
-        tr3 = abs(low - prev_close)
+        tr2 = (high - prev_close).abs()
+        tr3 = (low - prev_close).abs()
 
         true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = true_range.rolling(window=period).mean().iloc[-1]
+
+        # Drop NaN values that occur from the shift operation
+        true_range = true_range.dropna()
+
+        if len(true_range) < period:
+            logger.warning(f"Insufficient valid data for ATR on {symbol} after dropping NaN")
+            current_price = float(close.iloc[-1])
+            return 0.0, 0.0
+
+        # Calculate ATR using the last 'period' days of valid true range data
+        atr = true_range.tail(period).mean()
 
         current_price = float(close.iloc[-1])
         atr_percent = atr / current_price
@@ -251,19 +268,43 @@ class AIAnalyzer:
         regime_mode: TradingMode,
         relative_strength: tuple[bool, float, float],
         atr_data: tuple[float, float],
-        position_multiplier: float
+        position_multiplier: float,
+        position_data: dict = None
     ) -> str:
         """Build comprehensive analysis prompt with all strategy context."""
         is_outperforming, stock_return, benchmark_return = relative_strength
         atr, atr_percent = atr_data
+
+        # Build position context if we hold the stock
+        position_context = ""
+        if position_data:
+            qty = position_data["qty"]
+            avg_entry = position_data["avg_entry_price"]
+            unrealized_pl = position_data["unrealized_pl"]
+            unrealized_plpc = position_data["unrealized_plpc"]
+            market_value = position_data["market_value"]
+
+            position_context = f"""
+## Current Position in {symbol}
+- **Holding**: YES - {qty:.0f} shares
+- **Entry Price**: ${avg_entry:.2f}
+- **Current P&L**: ${unrealized_pl:+.2f} ({unrealized_plpc:+.2%})
+- **Position Value**: ${market_value:.2f}
+- **Stop Loss Alert**: {'⚠️ APPROACHING STOP (-8%)' if unrealized_plpc < -0.06 else 'No concern'}
+"""
+        else:
+            position_context = f"""
+## Current Position in {symbol}
+- **Holding**: NO - Not currently in position
+"""
 
         prompt = f"""You are an expert quantitative trader. Analyze {symbol} and provide a trading recommendation.
 
 ## Current Market Context
 - **Regime Mode**: {regime_mode.value.upper()}
 - **SPY Trend**: {'Bearish (>2% down over 5 days)' if regime_mode == TradingMode.DEFENSIVE else 'Neutral/Bullish'}
-
-## {symbol} Analysis
+{position_context}
+## {symbol} Market Analysis
 - **Current Price**: ${current_price:.2f}
 - **14-Day Return**: {stock_return:.2%}
 - **QQQ 14-Day Return**: {benchmark_return:.2%}
@@ -276,10 +317,13 @@ class AIAnalyzer:
 1. If DEFENSIVE mode: Only SELL or HOLD allowed (no new BUYs)
 2. If UNDERPERFORMING vs QQQ: Do not BUY
 3. If HIGH volatility: Position size already reduced by 50%
+4. Stop loss triggers at -8% unrealized loss
 
 ## Your Task
 Based on the above context and current market conditions, provide:
 1. Your recommendation: BUY, SELL, or HOLD
+   - If we hold the position: HOLD means stay in, SELL means exit
+   - If we don't hold: HOLD means stay out, BUY means enter
 2. Confidence level: HIGH, MEDIUM, or LOW
 3. Brief rationale (2-3 sentences)
 
@@ -297,12 +341,14 @@ RATIONALE: [Your reasoning]
         regime_mode: TradingMode,
         relative_strength: tuple[bool, float, float],
         atr_data: tuple[float, float],
-        position_multiplier: float
+        position_multiplier: float,
+        position_data: dict = None
     ) -> dict:
         """Get AI trading recommendation for a symbol."""
         prompt = self.build_analysis_prompt(
             symbol, current_price, regime_mode,
-            relative_strength, atr_data, position_multiplier
+            relative_strength, atr_data, position_multiplier,
+            position_data
         )
 
         message = self.client.messages.create(
@@ -631,7 +677,45 @@ def run_trading_cycle():
     regime_mode, spy_return = filters.check_regime_mode()
     job_logger.set_regime(regime_mode, spy_return)
 
-    # Step 2: Process each symbol
+    # Step 2: Enforce stop losses on existing positions
+    logger.info("-" * 40)
+    logger.info("Checking stop losses on existing positions")
+    positions = executor.get_positions()
+
+    for symbol, position_data in positions.items():
+        unrealized_plpc = position_data["unrealized_plpc"]
+        unrealized_pl = position_data["unrealized_pl"]
+        avg_entry_price = position_data["avg_entry_price"]
+
+        logger.info(f"{symbol}: P&L {unrealized_plpc:.2%} (${unrealized_pl:.2f})")
+
+        # Check if stop loss threshold is breached
+        if unrealized_plpc < -config.stop_loss_pct:
+            logger.warning(
+                f"STOP LOSS TRIGGERED for {symbol}: {unrealized_plpc:.2%} loss exceeds {config.stop_loss_pct:.0%} threshold"
+            )
+            qty = int(position_data["qty"])
+            order_id = executor.execute_sell(symbol)
+
+            if order_id:
+                logger.info(f"Stop loss executed: SELL {symbol} x {qty}")
+                # Log the stop loss trade
+                current_price = market_data.get_current_price(symbol)
+                log_trade(
+                    symbol=symbol,
+                    action="SELL",
+                    qty=qty,
+                    price=current_price,
+                    regime_mode=regime_mode.value,
+                    relative_strength="N/A",
+                    atr_percent=0.0,
+                    position_multiplier=1.0,
+                    ai_confidence="N/A",
+                    ai_rationale=f"Stop loss triggered at {unrealized_plpc:.2%}",
+                    order_id=order_id
+                )
+
+    # Step 3: Process each symbol
     for symbol in config.symbols:
         logger.info("-" * 40)
         logger.info(f"Analyzing {symbol}")
@@ -648,10 +732,15 @@ def run_trading_cycle():
             position_multiplier, atr_percent = filters.calculate_position_multiplier(symbol)
             atr_data = (market_data.calculate_atr(symbol)[0], atr_percent)
 
-            # Get AI recommendation
+            # Get current position data for this symbol (if exists)
+            positions = executor.get_positions()
+            position_data = positions.get(symbol, None)
+
+            # Get AI recommendation with position context
             ai_result = analyzer.get_recommendation(
                 symbol, current_price, regime_mode,
-                relative_strength, atr_data, position_multiplier
+                relative_strength, atr_data, position_multiplier,
+                position_data
             )
 
             recommendation = ai_result["recommendation"]
