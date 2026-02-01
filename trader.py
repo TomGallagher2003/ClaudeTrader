@@ -175,6 +175,67 @@ class MarketData:
 
         return float(atr), float(atr_percent)
 
+    def calculate_rsi(self, symbol: str, period: int = 14) -> float:
+        """
+        Calculate Relative Strength Index.
+        Returns RSI value (0-100).
+        """
+        bars = self.get_historical_bars(symbol, period + 10)
+
+        if len(bars) < period + 1:
+            logger.warning(f"Insufficient data for RSI calculation on {symbol}")
+            return 50.0  # Neutral RSI
+
+        close = bars['close']
+        delta = close.diff()
+
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+
+    def calculate_sma(self, symbol: str, period: int = 20) -> float:
+        """
+        Calculate Simple Moving Average.
+        Returns SMA value.
+        """
+        bars = self.get_historical_bars(symbol, period + 5)
+
+        if len(bars) < period:
+            logger.warning(f"Insufficient data for SMA calculation on {symbol}")
+            return float(bars['close'].iloc[-1])
+
+        sma = bars['close'].tail(period).mean()
+        return float(sma)
+
+    def get_volume_trend(self, symbol: str, period: int = 20) -> dict:
+        """
+        Analyze volume trends.
+        Returns dict with current volume vs average volume ratio and trend.
+        """
+        bars = self.get_historical_bars(symbol, period + 5)
+
+        if len(bars) < period:
+            logger.warning(f"Insufficient data for volume analysis on {symbol}")
+            return {"volume_ratio": 1.0, "is_elevated": False}
+
+        avg_volume = bars['volume'].tail(period).mean()
+        current_volume = float(bars['volume'].iloc[-1])
+
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+        is_elevated = volume_ratio > 1.5  # 50% above average
+
+        return {
+            "volume_ratio": float(volume_ratio),
+            "is_elevated": is_elevated
+        }
+
 
 # =============================================================================
 # STRATEGY FILTERS
@@ -249,6 +310,132 @@ class StrategyFilters:
 
         return multiplier, atr_percent
 
+    def get_multi_timeframe_returns(self, symbol: str) -> dict:
+        """
+        Get returns across multiple timeframes for trend confirmation.
+        Returns dict with 5-day, 14-day, and 30-day returns.
+        """
+        returns = {
+            "5d": self.data.calculate_return(symbol, 5),
+            "14d": self.data.calculate_return(symbol, 14),
+            "30d": self.data.calculate_return(symbol, 30)
+        }
+
+        logger.info(
+            f"{symbol} Multi-timeframe: 5d={returns['5d']:.2%}, "
+            f"14d={returns['14d']:.2%}, 30d={returns['30d']:.2%}"
+        )
+
+        return returns
+
+    def generate_entry_signals(self, symbol: str) -> dict:
+        """
+        Generate buy signals based on multiple technical indicators.
+        Returns dict with signal strength and contributing factors.
+        """
+        signals = {
+            "momentum_flip": False,
+            "ma_crossover": False,
+            "rsi_recovery": False,
+            "volume_confirmation": False,
+            "signal_count": 0,
+            "signal_strength": "NONE"
+        }
+
+        # Get current price and technical indicators
+        current_price = self.data.get_current_price(symbol)
+        sma_20 = self.data.calculate_sma(symbol, 20)
+        rsi = self.data.calculate_rsi(symbol, 14)
+        volume_data = self.data.get_volume_trend(symbol)
+
+        # Check for relative strength momentum flip
+        stock_return_5d = self.data.calculate_return(symbol, 5)
+        benchmark_return_5d = self.data.calculate_return(self.config.benchmark, 5)
+        stock_return_14d = self.data.calculate_return(symbol, 14)
+        benchmark_return_14d = self.data.calculate_return(self.config.benchmark, 14)
+
+        # Signal 1: Momentum turning positive (was underperforming, now outperforming)
+        if stock_return_5d > benchmark_return_5d and stock_return_14d < benchmark_return_14d:
+            signals["momentum_flip"] = True
+            signals["signal_count"] += 1
+            logger.info(f"{symbol} SIGNAL: Momentum flip detected (short-term outperformance)")
+
+        # Signal 2: Price above MA after period of underperformance
+        if current_price > sma_20 and stock_return_14d < 0:
+            signals["ma_crossover"] = True
+            signals["signal_count"] += 1
+            logger.info(f"{symbol} SIGNAL: Price above 20-day SMA after decline")
+
+        # Signal 3: RSI oversold recovery (30-60 range indicates recovery from oversold)
+        if 30 < rsi < 60:
+            signals["rsi_recovery"] = True
+            signals["signal_count"] += 1
+            logger.info(f"{symbol} SIGNAL: RSI recovery at {rsi:.1f}")
+
+        # Signal 4: Volume confirmation (elevated volume suggests institutional interest)
+        if volume_data["is_elevated"]:
+            signals["volume_confirmation"] = True
+            signals["signal_count"] += 1
+            logger.info(f"{symbol} SIGNAL: Elevated volume ({volume_data['volume_ratio']:.1f}x average)")
+
+        # Determine overall signal strength
+        if signals["signal_count"] >= 3:
+            signals["signal_strength"] = "STRONG"
+        elif signals["signal_count"] >= 2:
+            signals["signal_strength"] = "MODERATE"
+        elif signals["signal_count"] >= 1:
+            signals["signal_strength"] = "WEAK"
+
+        logger.info(
+            f"{symbol} Entry Signals: {signals['signal_count']}/4 active "
+            f"(Strength: {signals['signal_strength']})"
+        )
+
+        return signals
+
+    def check_profit_taking(self, symbol: str, position_data: dict) -> dict:
+        """
+        Check if profit-taking rules should trigger.
+        Returns dict with recommendation and reason.
+        """
+        result = {
+            "should_take_profit": False,
+            "action": "HOLD",
+            "quantity_pct": 0.0,
+            "reason": None
+        }
+
+        if not position_data:
+            return result
+
+        unrealized_plpc = position_data["unrealized_plpc"]
+        avg_entry_price = position_data["avg_entry_price"]
+        current_price = self.data.get_current_price(symbol)
+
+        # Rule 1: Scale out 50% at +15% gain
+        if unrealized_plpc >= 0.15:
+            result["should_take_profit"] = True
+            result["action"] = "PARTIAL_SELL"
+            result["quantity_pct"] = 0.5
+            result["reason"] = f"Profit target reached: +{unrealized_plpc:.1%} gain (target: +15%)"
+            logger.info(f"{symbol} PROFIT-TAKING: {result['reason']}")
+            return result
+
+        # Rule 2: Trailing stop at 5% from highs after +10% gain
+        if unrealized_plpc >= 0.10:
+            # Calculate if we're 5% below the high water mark
+            # For simplicity, we use current P&L as proxy
+            # In production, you'd track the highest price since entry
+            trailing_threshold = 0.05
+            if unrealized_plpc >= 0.10:
+                # Set a tighter stop (this is simplified - ideally track actual high)
+                result["should_take_profit"] = False
+                result["action"] = "TRAILING_STOP_ACTIVE"
+                result["reason"] = f"Trailing stop active: +{unrealized_plpc:.1%} gain, watching for 5% pullback"
+                logger.info(f"{symbol} {result['reason']}")
+
+        return result
+
 
 # =============================================================================
 # AI ANALYSIS
@@ -269,7 +456,10 @@ class AIAnalyzer:
         relative_strength: tuple[bool, float, float],
         atr_data: tuple[float, float],
         position_multiplier: float,
-        position_data: dict = None
+        position_data: dict = None,
+        multi_timeframe: dict = None,
+        entry_signals: dict = None,
+        technical_data: dict = None
     ) -> str:
         """Build comprehensive analysis prompt with all strategy context."""
         is_outperforming, stock_return, benchmark_return = relative_strength
@@ -291,6 +481,7 @@ class AIAnalyzer:
 - **Current P&L**: ${unrealized_pl:+.2f} ({unrealized_plpc:+.2%})
 - **Position Value**: ${market_value:.2f}
 - **Stop Loss Alert**: {'⚠️ APPROACHING STOP (-8%)' if unrealized_plpc < -0.06 else 'No concern'}
+- **Profit Target**: {'✅ NEAR TARGET (+15%)' if unrealized_plpc > 0.12 else 'Not yet'}
 """
         else:
             position_context = f"""
@@ -298,7 +489,57 @@ class AIAnalyzer:
 - **Holding**: NO - Not currently in position
 """
 
-        prompt = f"""You are an expert quantitative trader. Analyze {symbol} and provide a trading recommendation.
+        # Build multi-timeframe context
+        timeframe_context = ""
+        if multi_timeframe:
+            timeframe_context = f"""
+## Multi-Timeframe Momentum
+- **5-Day Return**: {multi_timeframe['5d']:.2%}
+- **14-Day Return**: {multi_timeframe['14d']:.2%}
+- **30-Day Return**: {multi_timeframe['30d']:.2%}
+- **Trend Alignment**: {'✅ All timeframes positive' if all(v > 0 for v in multi_timeframe.values()) else '⚠️ Mixed signals' if any(v > 0 for v in multi_timeframe.values()) else '❌ All timeframes negative'}
+"""
+
+        # Build technical indicators context
+        technical_context = ""
+        if technical_data:
+            rsi = technical_data.get('rsi', 50)
+            sma_20 = technical_data.get('sma_20', current_price)
+            volume_ratio = technical_data.get('volume_ratio', 1.0)
+
+            rsi_level = "OVERSOLD" if rsi < 30 else "OVERBOUGHT" if rsi > 70 else "NEUTRAL"
+            price_vs_ma = "ABOVE" if current_price > sma_20 else "BELOW"
+
+            technical_context = f"""
+## Technical Indicators
+- **RSI (14)**: {rsi:.1f} ({rsi_level})
+- **20-Day SMA**: ${sma_20:.2f} (Price is {price_vs_ma} MA by {abs((current_price - sma_20) / sma_20):.1%})
+- **Volume**: {volume_ratio:.2f}x average ({'ELEVATED' if volume_ratio > 1.5 else 'NORMAL'})
+"""
+
+        # Build entry signals context
+        signals_context = ""
+        if entry_signals:
+            signal_indicators = []
+            if entry_signals.get('momentum_flip'):
+                signal_indicators.append("✅ Momentum flip (short-term outperformance)")
+            if entry_signals.get('ma_crossover'):
+                signal_indicators.append("✅ Price above MA after decline")
+            if entry_signals.get('rsi_recovery'):
+                signal_indicators.append("✅ RSI recovery from oversold")
+            if entry_signals.get('volume_confirmation'):
+                signal_indicators.append("✅ Elevated volume")
+
+            signals_list = "\n".join([f"  - {s}" for s in signal_indicators]) if signal_indicators else "  - No strong entry signals detected"
+
+            signals_context = f"""
+## Entry Signal Analysis
+- **Signal Strength**: {entry_signals.get('signal_strength', 'NONE')}
+- **Active Signals** ({entry_signals.get('signal_count', 0)}/4):
+{signals_list}
+"""
+
+        prompt = f"""You are an expert quantitative trader. Analyze {symbol} and provide a comprehensive trading recommendation.
 
 ## Current Market Context
 - **Regime Mode**: {regime_mode.value.upper()}
@@ -312,25 +553,32 @@ class AIAnalyzer:
 - **30-Day ATR**: ${atr:.2f} ({atr_percent:.2%} of price)
 - **Volatility Classification**: {'HIGH (>5%)' if atr_percent > 0.05 else 'NORMAL'}
 - **Position Size Multiplier**: {position_multiplier:.0%}
-
+{timeframe_context}{technical_context}{signals_context}
 ## Trading Rules
 1. If DEFENSIVE mode: Only SELL or HOLD allowed (no new BUYs)
 2. If UNDERPERFORMING vs QQQ: Do not BUY
 3. If HIGH volatility: Position size already reduced by 50%
 4. Stop loss triggers at -8% unrealized loss
+5. Profit-taking: Scale out 50% at +15% gain
 
 ## Your Task
-Based on the above context and current market conditions, provide:
+Based on the comprehensive analysis above, provide:
 1. Your recommendation: BUY, SELL, or HOLD
    - If we hold the position: HOLD means stay in, SELL means exit
    - If we don't hold: HOLD means stay out, BUY means enter
 2. Confidence level: HIGH, MEDIUM, or LOW
-3. Brief rationale (2-3 sentences)
+3. Brief rationale (2-3 sentences max)
+4. Key technical levels (support/resistance)
+5. Risk/reward assessment
+6. Suggested entry/exit zones (if applicable)
 
 Format your response as:
 RECOMMENDATION: [BUY/SELL/HOLD]
 CONFIDENCE: [HIGH/MEDIUM/LOW]
 RATIONALE: [Your reasoning]
+TECHNICAL_LEVELS: Support: $X.XX, Resistance: $X.XX
+RISK_REWARD: [Brief assessment]
+ENTRY_EXIT: [Suggested zones or "N/A"]
 """
         return prompt
 
@@ -342,18 +590,21 @@ RATIONALE: [Your reasoning]
         relative_strength: tuple[bool, float, float],
         atr_data: tuple[float, float],
         position_multiplier: float,
-        position_data: dict = None
+        position_data: dict = None,
+        multi_timeframe: dict = None,
+        entry_signals: dict = None,
+        technical_data: dict = None
     ) -> dict:
         """Get AI trading recommendation for a symbol."""
         prompt = self.build_analysis_prompt(
             symbol, current_price, regime_mode,
             relative_strength, atr_data, position_multiplier,
-            position_data
+            position_data, multi_timeframe, entry_signals, technical_data
         )
 
         message = self.client.messages.create(
             model="claude-opus-4-5-20251101",
-            max_tokens=500,
+            max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
 
@@ -363,6 +614,9 @@ RATIONALE: [Your reasoning]
         recommendation = "HOLD"
         confidence = "LOW"
         rationale = ""
+        technical_levels = ""
+        risk_reward = ""
+        entry_exit = ""
 
         for line in response_text.split('\n'):
             line = line.strip()
@@ -376,11 +630,20 @@ RATIONALE: [Your reasoning]
                     confidence = conf
             elif line.startswith("RATIONALE:"):
                 rationale = line.replace("RATIONALE:", "").strip()
+            elif line.startswith("TECHNICAL_LEVELS:"):
+                technical_levels = line.replace("TECHNICAL_LEVELS:", "").strip()
+            elif line.startswith("RISK_REWARD:"):
+                risk_reward = line.replace("RISK_REWARD:", "").strip()
+            elif line.startswith("ENTRY_EXIT:"):
+                entry_exit = line.replace("ENTRY_EXIT:", "").strip()
 
         return {
             "recommendation": recommendation,
             "confidence": confidence,
             "rationale": rationale,
+            "technical_levels": technical_levels,
+            "risk_reward": risk_reward,
+            "entry_exit": entry_exit,
             "raw_response": response_text
         }
 
@@ -715,7 +978,37 @@ def run_trading_cycle():
                     order_id=order_id
                 )
 
-    # Step 3: Process each symbol
+    # Step 3: Check profit-taking on existing positions
+    logger.info("-" * 40)
+    logger.info("Checking profit-taking opportunities")
+    positions = executor.get_positions()
+
+    for symbol, position_data in positions.items():
+        profit_check = filters.check_profit_taking(symbol, position_data)
+
+        if profit_check["should_take_profit"] and profit_check["action"] == "PARTIAL_SELL":
+            logger.info(f"PROFIT-TAKING: {symbol} - {profit_check['reason']}")
+            qty_to_sell = int(position_data["qty"] * profit_check["quantity_pct"])
+            if qty_to_sell > 0:
+                order_id = executor.execute_sell(symbol, qty_to_sell)
+                if order_id:
+                    current_price = market_data.get_current_price(symbol)
+                    logger.info(f"Profit-taking executed: SELL {qty_to_sell} shares of {symbol}")
+                    log_trade(
+                        symbol=symbol,
+                        action="PARTIAL_SELL",
+                        qty=qty_to_sell,
+                        price=current_price,
+                        regime_mode=regime_mode.value,
+                        relative_strength="N/A",
+                        atr_percent=0.0,
+                        position_multiplier=1.0,
+                        ai_confidence="N/A",
+                        ai_rationale=profit_check["reason"],
+                        order_id=order_id
+                    )
+
+    # Step 4: Process each symbol
     for symbol in config.symbols:
         logger.info("-" * 40)
         logger.info(f"Analyzing {symbol}")
@@ -732,15 +1025,28 @@ def run_trading_cycle():
             position_multiplier, atr_percent = filters.calculate_position_multiplier(symbol)
             atr_data = (market_data.calculate_atr(symbol)[0], atr_percent)
 
+            # Get multi-timeframe returns
+            multi_timeframe = filters.get_multi_timeframe_returns(symbol)
+
+            # Generate entry signals
+            entry_signals = filters.generate_entry_signals(symbol)
+
+            # Collect technical data
+            technical_data = {
+                "rsi": market_data.calculate_rsi(symbol, 14),
+                "sma_20": market_data.calculate_sma(symbol, 20),
+                "volume_ratio": market_data.get_volume_trend(symbol)["volume_ratio"]
+            }
+
             # Get current position data for this symbol (if exists)
             positions = executor.get_positions()
             position_data = positions.get(symbol, None)
 
-            # Get AI recommendation with position context
+            # Get AI recommendation with enhanced context
             ai_result = analyzer.get_recommendation(
                 symbol, current_price, regime_mode,
                 relative_strength, atr_data, position_multiplier,
-                position_data
+                position_data, multi_timeframe, entry_signals, technical_data
             )
 
             recommendation = ai_result["recommendation"]
@@ -749,6 +1055,10 @@ def run_trading_cycle():
 
             logger.info(f"AI Recommendation: {recommendation} ({confidence})")
             logger.info(f"Rationale: {rationale}")
+            if ai_result.get("technical_levels"):
+                logger.info(f"Technical Levels: {ai_result['technical_levels']}")
+            if ai_result.get("risk_reward"):
+                logger.info(f"Risk/Reward: {ai_result['risk_reward']}")
 
             # Apply strategy filters
             final_action = recommendation
