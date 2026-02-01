@@ -52,6 +52,11 @@ class Config:
     benchmark: str = "QQQ"
     regime_indicator: str = "SPY"
 
+    # AI Model Configuration
+    # Options: claude-opus-4-5-20251101, claude-sonnet-4-20250514, claude-haiku-4-20250514
+    # Opus: Premium quality (~$0.075/call), Sonnet: Balanced (~$0.015/call), Haiku: Fast & cheap (~$0.003/call)
+    ai_model: str = None  # Defaults to sonnet for cost efficiency
+
     # Strategy thresholds
     regime_threshold: float = -0.02  # -2% SPY 5-day triggers defensive
     regime_lookback_days: int = 5
@@ -69,9 +74,17 @@ class Config:
     stop_loss_pct: float = 0.08  # 8% hard stop
     trailing_stop_pct: float = 0.05  # 5% trailing after 10% gain
 
+    # Tier 3 features
+    enable_news_analysis: bool = True  # Enable news/sentiment analysis
+    enable_portfolio_optimization: bool = True  # Enable portfolio correlation checks
+    enable_universe_screening: bool = False  # Enable weekly universe screening
+
     def __post_init__(self):
         if self.symbols is None:
             self.symbols = load_symbols()
+        if self.ai_model is None:
+            # Default to sonnet for 80% cost savings vs opus
+            self.ai_model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
 
 
 def load_symbols() -> list[str]:
@@ -82,6 +95,20 @@ def load_symbols() -> list[str]:
             return data.get('symbols', [])
     except FileNotFoundError:
         return ["NVDA", "AVGO", "ANET", "LLY", "PLTR", "MSFT", "AXON"]
+
+
+def load_universe() -> list[str]:
+    """Load broader universe of stocks for screening from universe.json."""
+    try:
+        with open('universe.json', 'r') as f:
+            data = json.load(f)
+            return data.get('symbols', [])
+    except FileNotFoundError:
+        logger.warning("universe.json not found, using default tech universe")
+        return [
+            "NVDA", "AVGO", "ANET", "MSFT", "GOOGL", "AAPL", "META", "AMZN",
+            "AMD", "CRM", "ORCL", "PLTR", "SNOW", "CRWD", "PANW"
+        ]
 
 
 # =============================================================================
@@ -603,7 +630,7 @@ ENTRY_EXIT: [Suggested zones or "N/A"]
         )
 
         message = self.client.messages.create(
-            model="claude-opus-4-5-20251101",
+            model=self.config.ai_model,
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -646,6 +673,363 @@ ENTRY_EXIT: [Suggested zones or "N/A"]
             "entry_exit": entry_exit,
             "raw_response": response_text
         }
+
+
+# =============================================================================
+# NEWS & SENTIMENT ANALYSIS
+# =============================================================================
+
+class NewsSentimentAnalyzer:
+    """
+    Placeholder for news and sentiment analysis.
+
+    Future integration would connect to:
+    - News APIs (Alpha Vantage, Finnhub, Benzinga, etc.)
+    - Social media sentiment (Twitter, Reddit, StockTwits)
+    - Earnings call transcripts
+    - SEC filings analysis
+
+    Current implementation: Placeholder that can be enabled/disabled via config.
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+
+    def analyze_sentiment(self, symbol: str) -> dict:
+        """
+        Analyze news sentiment for a symbol.
+
+        Returns:
+        - sentiment: POSITIVE, NEGATIVE, or NEUTRAL
+        - confidence: HIGH, MEDIUM, LOW
+        - summary: Brief summary of recent news
+        - should_avoid: Boolean flag for negative catalysts
+        """
+        if not self.config.enable_news_analysis:
+            return {
+                "sentiment": "NEUTRAL",
+                "confidence": "LOW",
+                "summary": "News analysis disabled",
+                "should_avoid": False,
+                "analysis_performed": False
+            }
+
+        # Placeholder: In production, this would fetch actual news via API
+        # For example:
+        # news_data = fetch_recent_news(symbol, days=7)
+        # sentiment_data = analyze_with_claude(news_data)
+
+        logger.info(f"News sentiment analysis for {symbol}: Feature placeholder (requires news API integration)")
+
+        return {
+            "sentiment": "NEUTRAL",
+            "confidence": "LOW",
+            "summary": "News API not configured - placeholder response",
+            "should_avoid": False,
+            "analysis_performed": False,
+            "note": "To enable: integrate news API (Alpha Vantage, Finnhub, etc.) and implement fetch_recent_news()"
+        }
+
+
+# =============================================================================
+# UNIVERSE SCREENING
+# =============================================================================
+
+class UniverseScreener:
+    """Screens broader universe of stocks to identify rotation candidates."""
+
+    def __init__(self, config: Config, market_data: MarketData):
+        self.config = config
+        self.data = market_data
+
+    def screen_universe(
+        self,
+        universe: list[str],
+        top_n: int = 10
+    ) -> list[dict]:
+        """
+        Screen a universe of stocks using quantitative criteria.
+        Returns top N candidates sorted by score.
+
+        Screening criteria:
+        1. Relative strength vs benchmark (14-day return)
+        2. Momentum consistency (5d, 14d, 30d alignment)
+        3. RSI in healthy range (30-70)
+        4. Volume confirmation (elevated vs average)
+        """
+        if not self.config.enable_universe_screening:
+            logger.info("Universe screening disabled")
+            return []
+
+        logger.info(f"Screening {len(universe)} symbols...")
+        candidates = []
+
+        for symbol in universe:
+            try:
+                score = self._calculate_screening_score(symbol)
+                if score["total_score"] > 0:  # Only include positive scores
+                    candidates.append({
+                        "symbol": symbol,
+                        "total_score": score["total_score"],
+                        "details": score
+                    })
+            except Exception as e:
+                logger.debug(f"Skipping {symbol}: {e}")
+                continue
+
+        # Sort by total score descending
+        candidates.sort(key=lambda x: x["total_score"], reverse=True)
+
+        top_candidates = candidates[:top_n]
+
+        logger.info(f"Top {len(top_candidates)} candidates identified:")
+        for candidate in top_candidates:
+            logger.info(
+                f"  {candidate['symbol']}: Score {candidate['total_score']:.1f} "
+                f"(RS: {candidate['details']['relative_strength_score']:.1f}, "
+                f"Momentum: {candidate['details']['momentum_score']:.1f})"
+            )
+
+        return top_candidates
+
+    def _calculate_screening_score(self, symbol: str) -> dict:
+        """Calculate composite screening score for a symbol."""
+        score_components = {
+            "relative_strength_score": 0.0,
+            "momentum_score": 0.0,
+            "rsi_score": 0.0,
+            "volume_score": 0.0,
+            "total_score": 0.0
+        }
+
+        # 1. Relative Strength (max 40 points)
+        stock_return_14d = self.data.calculate_return(symbol, 14)
+        benchmark_return_14d = self.data.calculate_return(self.config.benchmark, 14)
+        outperformance = stock_return_14d - benchmark_return_14d
+
+        if outperformance > 0.10:  # 10%+ outperformance
+            score_components["relative_strength_score"] = 40.0
+        elif outperformance > 0.05:  # 5-10% outperformance
+            score_components["relative_strength_score"] = 30.0
+        elif outperformance > 0:  # Positive outperformance
+            score_components["relative_strength_score"] = 20.0
+        else:
+            score_components["relative_strength_score"] = 0.0
+
+        # 2. Momentum Consistency (max 30 points)
+        ret_5d = self.data.calculate_return(symbol, 5)
+        ret_14d = self.data.calculate_return(symbol, 14)
+        ret_30d = self.data.calculate_return(symbol, 30)
+
+        positive_timeframes = sum([ret_5d > 0, ret_14d > 0, ret_30d > 0])
+
+        if positive_timeframes == 3:
+            score_components["momentum_score"] = 30.0
+        elif positive_timeframes == 2:
+            score_components["momentum_score"] = 20.0
+        elif positive_timeframes == 1:
+            score_components["momentum_score"] = 10.0
+
+        # 3. RSI Health (max 20 points)
+        rsi = self.data.calculate_rsi(symbol, 14)
+
+        if 40 <= rsi <= 60:  # Neutral/healthy
+            score_components["rsi_score"] = 20.0
+        elif 30 <= rsi <= 70:  # Acceptable range
+            score_components["rsi_score"] = 15.0
+        elif 30 <= rsi < 40:  # Oversold recovery zone
+            score_components["rsi_score"] = 10.0
+
+        # 4. Volume Confirmation (max 10 points)
+        volume_data = self.data.get_volume_trend(symbol, 20)
+
+        if volume_data["is_elevated"]:
+            score_components["volume_score"] = 10.0
+        elif volume_data["volume_ratio"] > 1.0:
+            score_components["volume_score"] = 5.0
+
+        # Calculate total
+        score_components["total_score"] = sum([
+            score_components["relative_strength_score"],
+            score_components["momentum_score"],
+            score_components["rsi_score"],
+            score_components["volume_score"]
+        ])
+
+        return score_components
+
+
+# =============================================================================
+# PORTFOLIO OPTIMIZATION
+# =============================================================================
+
+class PortfolioOptimizer:
+    """Analyzes portfolio correlation and concentration risk using AI."""
+
+    def __init__(self, config: Config, market_data: MarketData):
+        self.config = config
+        self.data = market_data
+        self.client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+
+    def analyze_portfolio_risk(self, positions: dict, account_equity: float) -> dict:
+        """
+        Analyze overall portfolio for correlation and concentration risk.
+        Returns dict with risk assessment and recommendations.
+        """
+        if not positions or not self.config.enable_portfolio_optimization:
+            return {
+                "analysis_performed": False,
+                "reason": "No positions or optimization disabled"
+            }
+
+        # Calculate position concentrations
+        concentrations = {}
+        total_value = sum(pos["market_value"] for pos in positions.values())
+
+        for symbol, pos_data in positions.items():
+            pct = pos_data["market_value"] / account_equity
+            concentrations[symbol] = {
+                "value": pos_data["market_value"],
+                "pct_of_portfolio": pct,
+                "unrealized_plpc": pos_data["unrealized_plpc"]
+            }
+
+        # Get correlation data (calculate returns correlation)
+        correlations = self._calculate_correlation_matrix(list(positions.keys()))
+
+        # Build AI prompt for portfolio analysis
+        prompt = self._build_portfolio_analysis_prompt(
+            concentrations, correlations, account_equity
+        )
+
+        # Get AI assessment
+        try:
+            message = self.client.messages.create(
+                model=self.config.ai_model,
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            analysis = message.content[0].text
+
+            return {
+                "analysis_performed": True,
+                "concentrations": concentrations,
+                "correlation_summary": correlations,
+                "ai_assessment": analysis,
+                "high_concentration_symbols": [
+                    sym for sym, data in concentrations.items()
+                    if data["pct_of_portfolio"] > self.config.max_position_pct
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"Portfolio optimization analysis failed: {e}")
+            return {
+                "analysis_performed": False,
+                "reason": f"Error: {str(e)}"
+            }
+
+    def _calculate_correlation_matrix(self, symbols: list[str]) -> dict:
+        """Calculate pairwise correlation of returns for portfolio symbols."""
+        if len(symbols) < 2:
+            return {"note": "Need 2+ positions for correlation analysis"}
+
+        try:
+            # Get 30-day returns for each symbol
+            returns_data = {}
+            for symbol in symbols:
+                bars = self.data.get_historical_bars(symbol, 30)
+                if len(bars) >= 2:
+                    returns = bars['close'].pct_change().dropna()
+                    returns_data[symbol] = returns
+
+            if len(returns_data) < 2:
+                return {"note": "Insufficient data for correlation"}
+
+            # Create DataFrame and calculate correlation
+            df = pd.DataFrame(returns_data)
+            corr_matrix = df.corr()
+
+            # Find highest correlations
+            high_corr_pairs = []
+            for i in range(len(corr_matrix.columns)):
+                for j in range(i + 1, len(corr_matrix.columns)):
+                    sym1 = corr_matrix.columns[i]
+                    sym2 = corr_matrix.columns[j]
+                    corr_value = corr_matrix.iloc[i, j]
+                    if abs(corr_value) > 0.7:  # High correlation threshold
+                        high_corr_pairs.append({
+                            "pair": f"{sym1}-{sym2}",
+                            "correlation": float(corr_value)
+                        })
+
+            avg_correlation = float(corr_matrix.values[~pd.isna(corr_matrix.values)].mean())
+
+            return {
+                "average_correlation": avg_correlation,
+                "high_correlation_pairs": high_corr_pairs,
+                "note": "Correlation > 0.7 indicates high similarity, may increase concentration risk"
+            }
+
+        except Exception as e:
+            logger.warning(f"Correlation calculation failed: {e}")
+            return {"note": f"Error calculating correlations: {str(e)}"}
+
+    def _build_portfolio_analysis_prompt(
+        self,
+        concentrations: dict,
+        correlations: dict,
+        account_equity: float
+    ) -> str:
+        """Build prompt for AI portfolio analysis."""
+
+        conc_text = "\n".join([
+            f"  - {sym}: ${data['value']:.2f} ({data['pct_of_portfolio']:.1%} of portfolio) "
+            f"P&L: {data['unrealized_plpc']:+.1%}"
+            for sym, data in concentrations.items()
+        ])
+
+        corr_text = ""
+        if "high_correlation_pairs" in correlations and correlations["high_correlation_pairs"]:
+            pairs_text = "\n".join([
+                f"  - {pair['pair']}: {pair['correlation']:.2f}"
+                for pair in correlations["high_correlation_pairs"]
+            ])
+            corr_text = f"\n\n## High Correlation Pairs (>0.7)\n{pairs_text}"
+        else:
+            corr_text = "\n\n## Correlation Analysis\n  - No highly correlated pairs detected (all < 0.7)"
+
+        if "average_correlation" in correlations:
+            corr_text += f"\n  - Average portfolio correlation: {correlations['average_correlation']:.2f}"
+
+        prompt = f"""You are a portfolio risk manager. Analyze this portfolio for concentration and correlation risk.
+
+## Current Portfolio
+Total Equity: ${account_equity:.2f}
+
+## Position Concentrations
+{conc_text}
+{corr_text}
+
+## Risk Thresholds
+- Maximum single position: {self.config.max_position_pct:.0%}
+- Preferred maximum correlation: 0.7
+
+## Your Task
+Provide a brief risk assessment (3-4 sentences):
+1. Identify concentration risks (positions exceeding limits)
+2. Assess correlation risk (too many similar holdings?)
+3. Suggest rebalancing actions if needed
+4. Overall risk rating: LOW, MODERATE, or HIGH
+
+Format:
+RISK_RATING: [LOW/MODERATE/HIGH]
+ASSESSMENT: [Your analysis]
+RECOMMENDATIONS: [Specific actions or "No changes needed"]
+"""
+        return prompt
 
 
 # =============================================================================
@@ -934,7 +1318,11 @@ def run_trading_cycle():
     filters = StrategyFilters(config, market_data)
     analyzer = AIAnalyzer(config)
     executor = TradeExecutor(config)
+    portfolio_optimizer = PortfolioOptimizer(config, market_data)
     job_logger = JobDecisionLogger()
+
+    logger.info(f"Using AI model: {config.ai_model}")
+    logger.info(f"Portfolio optimization: {'ENABLED' if config.enable_portfolio_optimization else 'DISABLED'}")
 
     # Step 1: Check market regime
     regime_mode, spy_return = filters.check_regime_mode()
@@ -1008,7 +1396,29 @@ def run_trading_cycle():
                         order_id=order_id
                     )
 
-    # Step 4: Process each symbol
+    # Step 4: Portfolio optimization analysis
+    logger.info("-" * 40)
+    logger.info("Running portfolio optimization analysis")
+    account = executor.get_account()
+    positions = executor.get_positions()
+
+    portfolio_analysis = portfolio_optimizer.analyze_portfolio_risk(
+        positions, account["equity"]
+    )
+
+    if portfolio_analysis["analysis_performed"]:
+        logger.info("Portfolio Risk Analysis:")
+        logger.info(f"  Positions analyzed: {len(positions)}")
+        if "high_concentration_symbols" in portfolio_analysis:
+            high_conc = portfolio_analysis["high_concentration_symbols"]
+            if high_conc:
+                logger.warning(f"  ⚠️  High concentration detected in: {', '.join(high_conc)}")
+        if "ai_assessment" in portfolio_analysis:
+            logger.info(f"  AI Assessment:\n{portfolio_analysis['ai_assessment']}")
+    else:
+        logger.info(f"  Portfolio optimization skipped: {portfolio_analysis.get('reason', 'Unknown')}")
+
+    # Step 5: Process each symbol
     for symbol in config.symbols:
         logger.info("-" * 40)
         logger.info(f"Analyzing {symbol}")

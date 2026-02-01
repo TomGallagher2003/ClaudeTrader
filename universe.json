@@ -1,0 +1,20 @@
+{
+  "name": "Tech & Growth Universe",
+  "description": "Broader universe for weekly screening - focused on tech, AI, healthcare, and defense themes",
+  "symbols": [
+    "NVDA", "AVGO", "ANET", "LLY", "PLTR", "MSFT", "AXON",
+    "GOOGL", "AAPL", "META", "AMZN", "TSLA", "AMD", "INTC",
+    "CRM", "ORCL", "ADBE", "NOW", "SNOW", "DDOG", "CRWD",
+    "PANW", "ZS", "NET", "FTNT", "S",
+    "SMCI", "MRVL", "QCOM", "MU", "ASML", "TSM",
+    "NFLX", "DIS", "SPOT", "UBER", "ABNB",
+    "SQ", "PYPL", "V", "MA", "AXP",
+    "JPM", "BAC", "GS", "MS", "WFC",
+    "UNH", "JNJ", "PFE", "ABBV", "TMO", "DHR", "ISRG",
+    "BA", "LMT", "RTX", "NOC", "GD",
+    "XOM", "CVX", "COP", "SLB", "EOG",
+    "COST", "WMT", "TGT", "HD", "LOW",
+    "NKE", "LULU", "SBUX", "MCD", "CMG"
+  ],
+  "last_updated": "2026-02-01"
+}
