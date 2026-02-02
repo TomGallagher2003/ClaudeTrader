@@ -454,9 +454,11 @@ class Backtester:
         for symbol in symbols:
             try:
                 df = self.market_data.get_historical_bars(symbol, days)
-                # Filter to exact date range
-                df = df[df.index >= pd.Timestamp(start_date)]
-                df = df[df.index <= pd.Timestamp(end_date)]
+                # Filter to exact date range (handle timezone-aware index)
+                start_ts = pd.Timestamp(start_date, tz='UTC')
+                end_ts = pd.Timestamp(end_date, tz='UTC')
+                df = df[df.index >= start_ts]
+                df = df[df.index <= end_ts]
                 data[symbol] = df
                 logger.info(f"Loaded {len(df)} days of data for {symbol}")
             except Exception as e:
