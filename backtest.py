@@ -658,8 +658,8 @@ class Backtester:
             # This is a simplified version - in production you'd need to inject
             # market_data that respects the backtest date
             # For now, just check the simple profit-taking rule
-            if unrealized_plpc >= 0.15:
-                # Scale out 50% at +15% gain
+            if unrealized_plpc >= 0.25:
+                # Scale out 50% at +25% gain
                 shares_to_sell = position.shares // 2
                 if shares_to_sell > 0:
                     logger.debug(f"PROFIT-TAKING: Selling 50% of {symbol} at +{unrealized_plpc:.1%}")
@@ -708,7 +708,7 @@ class Backtester:
             benchmark_data_upto_date, 14
         )
 
-        is_outperforming = stock_return_14d > benchmark_return_14d
+        is_outperforming = stock_return_14d > (benchmark_return_14d - 0.05)
 
         # Check if we should buy
         existing_position = self.portfolio.get_position(symbol)
@@ -724,7 +724,7 @@ class Backtester:
                     symbol_data_upto_date, benchmark_data_upto_date
                 )
 
-                if entry_signals["signal_count"] >= 2:  # At least MODERATE strength
+                if entry_signals["signal_count"] >= 1:  # At least one signal
                     recommendation = "BUY"
         else:
             # Consider selling (if AI suggests or if underperforming badly)
