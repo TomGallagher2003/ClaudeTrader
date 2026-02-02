@@ -58,7 +58,7 @@ class Config:
     ai_model: str = None  # Defaults to sonnet for cost efficiency
 
     # Strategy thresholds
-    regime_threshold: float = -0.02  # -2% SPY 5-day triggers defensive
+    regime_threshold: float = -0.05  # -5% SPY 5-day triggers defensive
     regime_lookback_days: int = 5
     relative_strength_days: int = 14
     atr_period: int = 30
@@ -71,7 +71,7 @@ class Config:
     min_cash_reserve_pct: float = 0.10  # Keep 10% cash
 
     # Risk management
-    stop_loss_pct: float = 0.08  # 8% hard stop
+    stop_loss_pct: float = 0.12  # 12% hard stop
     trailing_stop_pct: float = 0.05  # 5% trailing after 10% gain
 
     # Tier 3 features
