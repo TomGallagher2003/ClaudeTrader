@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
 ClaudeTrader - Autonomous AI Trading Bot for Alpaca
-Optimized for 2026 market regime with regime detection, relative strength, and volatility sizing.
+AGGRESSIVE MODE: Optimized for maximum growth with relaxed risk controls.
+- 15% base position size (was 10%)
+- 20% stop loss (was 12%)
+- Relative strength filter DISABLED
+- Regime filter only triggers at -15% SPY (was -5%)
+- 2% cash reserve (was 10%)
 """
 
 import os
@@ -57,21 +62,21 @@ class Config:
     # Opus: Premium quality (~$0.075/call), Sonnet: Balanced (~$0.015/call), Haiku: Fast & cheap (~$0.003/call)
     ai_model: str = None  # Defaults to sonnet for cost efficiency
 
-    # Strategy thresholds
-    regime_threshold: float = -0.05  # -5% SPY 5-day triggers defensive
+    # Strategy thresholds - AGGRESSIVE MODE
+    regime_threshold: float = -0.15  # -15% SPY 5-day triggers defensive (was -5%, much more lenient)
     regime_lookback_days: int = 5
     relative_strength_days: int = 14
     atr_period: int = 30
     atr_volatility_threshold: float = 0.05  # 5% ATR triggers size reduction
-    volatility_size_multiplier: float = 0.5  # 50% reduction
+    volatility_size_multiplier: float = 0.9  # 90% (only 10% reduction) - AGGRESSIVE (was 50%)
 
-    # Position sizing
-    base_position_pct: float = 0.10  # 10% of portfolio per position
-    max_position_pct: float = 0.15  # 15% max single position
-    min_cash_reserve_pct: float = 0.10  # Keep 10% cash
+    # Position sizing - AGGRESSIVE MODE
+    base_position_pct: float = 0.15  # 15% of portfolio per position (was 10%)
+    max_position_pct: float = 0.25  # 25% max single position (was 15%)
+    min_cash_reserve_pct: float = 0.02  # Keep only 2% cash (was 10%) - STAY INVESTED
 
-    # Risk management
-    stop_loss_pct: float = 0.12  # 12% hard stop
+    # Risk management - AGGRESSIVE MODE
+    stop_loss_pct: float = 0.20  # 20% hard stop (was 12%) - WIDER STOPS
     trailing_stop_pct: float = 0.05  # 5% trailing after 10% gain
 
     # Tier 3 features
@@ -566,11 +571,11 @@ class AIAnalyzer:
 {signals_list}
 """
 
-        prompt = f"""You are an expert quantitative trader. Analyze {symbol} and provide a comprehensive trading recommendation.
+        prompt = f"""You are an expert quantitative trader using an AGGRESSIVE growth strategy. Analyze {symbol} and provide a comprehensive trading recommendation.
 
 ## Current Market Context
 - **Regime Mode**: {regime_mode.value.upper()}
-- **SPY Trend**: {'Bearish (>2% down over 5 days)' if regime_mode == TradingMode.DEFENSIVE else 'Neutral/Bullish'}
+- **SPY Trend**: {'Bearish (>15% down over 5 days)' if regime_mode == TradingMode.DEFENSIVE else 'Neutral/Bullish'}
 {position_context}
 ## {symbol} Market Analysis
 - **Current Price**: ${current_price:.2f}
@@ -581,12 +586,13 @@ class AIAnalyzer:
 - **Volatility Classification**: {'HIGH (>5%)' if atr_percent > 0.05 else 'NORMAL'}
 - **Position Size Multiplier**: {position_multiplier:.0%}
 {timeframe_context}{technical_context}{signals_context}
-## Trading Rules
-1. If DEFENSIVE mode: Only SELL or HOLD allowed (no new BUYs)
-2. If UNDERPERFORMING vs QQQ: Do not BUY
-3. If HIGH volatility: Position size already reduced by 50%
-4. Stop loss triggers at -8% unrealized loss
+## AGGRESSIVE Trading Rules
+1. If DEFENSIVE mode: Only SELL or HOLD allowed (triggers at -15% SPY, not -5%)
+2. Relative strength filter RELAXED: Minor underperformance vs QQQ is ALLOWED
+3. If HIGH volatility: Position size reduced by only 10% (not 50%)
+4. Stop loss triggers at -20% unrealized loss (WIDE stops to let positions breathe)
 5. Profit-taking: Scale out 50% at +15% gain
+6. STAY FULLY INVESTED: Only 2% cash reserve (not 10%)
 
 ## Your Task
 Based on the comprehensive analysis above, provide:
@@ -1478,13 +1484,18 @@ def run_trading_cycle():
             if regime_mode == TradingMode.DEFENSIVE and recommendation == "BUY":
                 logger.warning(f"BUY blocked for {symbol}: DEFENSIVE mode active")
                 final_action = "HOLD"
-                block_reason = "DEFENSIVE mode - market down >2% over 5 days"
+                block_reason = f"DEFENSIVE mode - market down >{abs(config.regime_threshold):.0%} over 5 days"
 
-            # Filter 2: Block BUYs if underperforming benchmark
-            if not is_outperforming and recommendation == "BUY":
-                logger.warning(f"BUY blocked for {symbol}: Underperforming {config.benchmark}")
+            # Filter 2: AGGRESSIVE MODE - Relative strength filter DISABLED
+            # Only block if severely underperforming (>15% worse than benchmark)
+            underperformance = benchmark_return - stock_return
+            if underperformance > 0.15 and recommendation == "BUY":
+                logger.warning(f"BUY blocked for {symbol}: Severely underperforming {config.benchmark} by {underperformance:.1%}")
                 final_action = "HOLD"
-                block_reason = f"Underperforming {config.benchmark} benchmark"
+                block_reason = f"Severely underperforming {config.benchmark} by {underperformance:.1%}"
+            elif not is_outperforming and recommendation == "BUY":
+                # In aggressive mode, we LOG but don't BLOCK minor underperformance
+                logger.info(f"AGGRESSIVE MODE: Allowing BUY despite underperforming {config.benchmark} (stock: {stock_return:.1%} vs bench: {benchmark_return:.1%})")
 
             # Execute trade
             order_id = None

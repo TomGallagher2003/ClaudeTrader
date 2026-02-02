@@ -6,6 +6,20 @@ Autonomous AI-powered trading bot using Alpaca API and Claude for market analysi
 
 ClaudeTrader is a quantitative trading system optimized for the 2026 market regime. It combines rule-based filters with AI-driven analysis to make trading decisions. The system features comprehensive risk management, portfolio optimization, and cost-efficient AI model selection.
 
+## ⚡ AGGRESSIVE MODE (Current Configuration)
+
+**Status**: Backtest revealed severe underperformance (26.69% vs QQQ's 134.19%) due to overly conservative filters. The bot went defensive in May 2025 and never re-entered, missing the entire rally.
+
+**Aggressive Mode Changes**:
+- **Regime Filter**: Relaxed from -5% to -15% SPY threshold (only go defensive in major crashes)
+- **Relative Strength Filter**: DISABLED for minor underperformance (only blocks if >15% worse than QQQ)
+- **Position Sizing**: Increased from 10% → 15% base, 15% → 25% max
+- **Cash Reserve**: Reduced from 10% → 2% (stay fully invested)
+- **Volatility Multiplier**: Changed from 50% → 90% (only 10% size reduction for high volatility)
+- **Stop Loss**: Widened from 12% → 20% (let winners run, accommodate normal volatility)
+
+**Goal**: Match or beat QQQ benchmark returns by staying invested during bull markets while still protecting against true bear markets.
+
 ## Implementation Status
 
 ✅ **Tier 1 (Critical Fixes)**: Complete
@@ -49,22 +63,24 @@ trader.py
 └── Main Loop (run_trading_cycle)
 ```
 
-## Core Strategy Rules
+## Core Strategy Rules (AGGRESSIVE MODE)
 
-### 1. Regime Detection
+### 1. Regime Detection (RELAXED)
 - Monitors SPY 5-day return
-- If SPY < -2% over 5 days: DEFENSIVE mode (no new buys)
+- If SPY < -15% over 5 days: DEFENSIVE mode (no new buys) ⚡ **CHANGED from -5%**
 - Otherwise: OFFENSIVE mode (full trading)
+- **Result**: Only goes defensive in major market crashes, not minor pullbacks
 
-### 2. Relative Strength Filter
+### 2. Relative Strength Filter (MOSTLY DISABLED)
 - Compares each stock's 14-day return vs QQQ
-- Only allows BUY if stock is outperforming benchmark
-- Prevents buying laggards/falling knives
+- ⚡ **AGGRESSIVE MODE**: Minor underperformance is ALLOWED
+- Only blocks BUY if stock underperforms by >15%
+- **Result**: Can buy during recoveries even if lagging benchmark slightly
 
-### 3. Volatility Sizing (ATR)
+### 3. Volatility Sizing (ATR) (RELAXED)
 - Calculates 30-day Average True Range
-- If ATR > 5% of price: reduces position by 50%
-- Maintains consistent risk across different volatility regimes
+- If ATR > 5% of price: reduces position by only 10% ⚡ **CHANGED from 50%**
+- **Result**: Maintains larger positions even in volatile stocks
 
 ### 4. Entry Signal Generation (Tier 2)
 - **Momentum Flip**: Short-term outperformance vs benchmark
@@ -76,10 +92,10 @@ trader.py
 ### 5. Profit-Taking Rules (Tier 2)
 - **Scale Out**: Sell 50% at +15% gain
 - **Trailing Stop**: 5% from highs after +10% gain
-- **Stop Loss**: Hard exit at -8% loss
+- **Stop Loss**: Hard exit at -20% loss ⚡ **CHANGED from -12%** (wider stops)
 
 ### 6. Portfolio Optimization (Tier 3)
-- Analyzes position concentration (flags positions >15%)
+- Analyzes position concentration (flags positions >25%) ⚡ **CHANGED from >15%**
 - Calculates correlation matrix between holdings
 - Identifies high correlation pairs (>0.7)
 - AI-powered risk assessment and rebalancing recommendations
@@ -163,13 +179,14 @@ pytest tests/ -v
 - `trader.log` - Application logs
 - `STRATEGY_ASSESSMENT.md` - Comprehensive strategy analysis and roadmap
 
-## Risk Controls
+## Risk Controls (AGGRESSIVE MODE)
 
-- Max 15% of portfolio in single position
-- Min 10% cash reserve
-- 8% hard stop loss (enforced on every cycle)
+- Max 25% of portfolio in single position ⚡ **(was 15%)**
+- Min 2% cash reserve ⚡ **(was 10%)**
+- 20% hard stop loss (enforced on every cycle) ⚡ **(was 12%)**
 - 5% trailing stop after +10% gains
-- Defensive mode blocks new buys in downtrends
+- Defensive mode blocks new buys only at -15% SPY ⚡ **(was -5%)**
+- Relative strength filter disabled for minor underperformance
 - Portfolio correlation monitoring
 - Concentration risk alerts
 
