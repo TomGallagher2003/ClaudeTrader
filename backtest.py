@@ -509,9 +509,9 @@ class Backtester:
         for current_date in trading_dates:
             logger.debug(f"\n--- Processing {current_date.date()} ---")
 
-            # Get current prices for all symbols
+            # Get current prices for all symbols (including benchmark for tracking)
             current_prices = {}
-            for symbol in symbols:
+            for symbol in symbols + [self.config.benchmark]:
                 if symbol in historical_data and current_date in historical_data[symbol].index:
                     current_prices[symbol] = float(historical_data[symbol].loc[current_date, 'close'])
 
