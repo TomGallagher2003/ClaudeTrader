@@ -1008,16 +1008,21 @@ class Backtester:
 
 def main():
     """Run backtest example."""
+    # Get configuration from environment or use defaults
+    initial_capital = float(os.getenv('BACKTEST_INITIAL_CAPITAL', '100000'))
+    start_date_str = os.getenv('BACKTEST_START_DATE', '2023-01-01')
+    end_date_str = os.getenv('BACKTEST_END_DATE', '2025-12-31')
+
+    # Parse dates
+    start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+    end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+
     # Initialize backtester
     backtester = Backtester(
-        initial_capital=100000.0,
+        initial_capital=initial_capital,
         transaction_costs=TransactionCosts(),
         use_ai=False  # Set to False to save API costs
     )
-
-    # Define backtest period
-    start_date = datetime(2023, 1, 1)
-    end_date = datetime(2025, 12, 31)
 
     # Run backtest
     performance = backtester.run_backtest(

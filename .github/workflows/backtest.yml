@@ -1,0 +1,63 @@
+name: Run Backtest
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      start_date:
+        description: 'Start date (YYYY-MM-DD)'
+        required: false
+        default: '2023-01-01'
+      end_date:
+        description: 'End date (YYYY-MM-DD)'
+        required: false
+        default: '2025-12-31'
+      initial_capital:
+        description: 'Initial capital ($)'
+        required: false
+        default: '100000'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backtest
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BACKTEST_START_DATE: ${{ github.event.inputs.start_date }}
+          BACKTEST_END_DATE: ${{ github.event.inputs.end_date }}
+          BACKTEST_INITIAL_CAPITAL: ${{ github.event.inputs.initial_capital }}
+        run: python backtest.py
+
+      - name: Generate summary for browser viewing
+        if: always()
+        run: |
+          if [ -f backtest_results.json ]; then
+            python generate_summary.py backtest_results.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Backtest results file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload backtest results (single file)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-results
+          path: backtest_results.json
+          retention-days: 90
+          # Single file artifact - can be viewed directly in GitHub UI
