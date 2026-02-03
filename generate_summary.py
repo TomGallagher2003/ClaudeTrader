@@ -102,8 +102,18 @@ def format_trading_summary(data: dict) -> str:
 
     md.append("# 🤖 Trading Bot Execution Summary\n")
 
-    timestamp = data.get('timestamp', datetime.now().isoformat())
+    timestamp = data.get('job_timestamp', data.get('timestamp', datetime.now().isoformat()))
     md.append(f"**Execution Time:** {timestamp}\n")
+
+    # Check if job was skipped
+    status = data.get('status')
+    if status == 'SKIPPED':
+        reason = data.get('reason', 'Unknown reason')
+        md.append(f"## ⏸️ Job Skipped\n")
+        md.append(f"**Reason:** {reason}\n")
+        md.append("---")
+        md.append(f"_Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}_")
+        return "\n".join(md)
 
     # Portfolio summary
     portfolio = data.get('portfolio', {})
@@ -133,33 +143,69 @@ def format_trading_summary(data: dict) -> str:
         md.append("## 📊 Current Positions\n")
         md.append("_No positions held_\n")
 
+    # Summary section (if available from job log)
+    summary = data.get('summary', {})
+    if summary and summary.get('total_symbols_analyzed', 0) > 0:
+        md.append("## 📋 Analysis Summary\n")
+        md.append("| Metric | Count |")
+        md.append("|--------|-------|")
+        md.append(f"| Symbols Analyzed | {summary.get('total_symbols_analyzed', 0)} |")
+        md.append(f"| BUY Signals | {summary.get('buys', 0)} |")
+        md.append(f"| SELL Signals | {summary.get('sells', 0)} |")
+        md.append(f"| HOLD Signals | {summary.get('holds', 0)} |")
+        md.append(f"| **Trades Executed** | **{summary.get('trades_executed', 0)}** |\n")
+
+        # Show executed trades if any
+        executed = summary.get('executed_trades', [])
+        if executed:
+            md.append("### ✅ Executed Trades\n")
+            md.append("| Symbol | Action | Quantity | Price |")
+            md.append("|--------|--------|----------|-------|")
+            for trade in executed:
+                md.append(
+                    f"| {trade.get('symbol', 'N/A')} | "
+                    f"{trade.get('action', 'N/A')} | "
+                    f"{trade.get('qty', 0):,} | "
+                    f"${trade.get('price', 0):.2f} |"
+                )
+            md.append("")
+
     # Decisions
     decisions = data.get('decisions', [])
     if decisions:
         md.append("## 🎯 Trading Decisions\n")
-        md.append("| Symbol | Decision | Rationale |")
-        md.append("|--------|----------|-----------|")
+        md.append("| Symbol | Action | AI Rec | Confidence | Rationale |")
+        md.append("|--------|--------|--------|------------|-----------|")
         for decision in decisions:
             rationale = decision.get('ai_rationale', 'N/A')
             # Truncate long rationales
-            if len(rationale) > 100:
-                rationale = rationale[:97] + "..."
+            if len(rationale) > 80:
+                rationale = rationale[:77] + "..."
             md.append(
                 f"| {decision.get('symbol', 'N/A')} | "
-                f"{decision.get('recommendation', 'N/A')} | "
+                f"{decision.get('final_action', decision.get('recommendation', 'N/A'))} | "
+                f"{decision.get('ai_recommendation', 'N/A')} | "
+                f"{decision.get('ai_confidence', 'N/A')} | "
                 f"{rationale} |"
             )
         md.append("")
 
-    # Market regime
-    regime = data.get('regime', {})
+    # Market regime (support both old 'regime' and new 'market_regime' keys)
+    regime = data.get('market_regime', data.get('regime', {}))
     if regime:
         md.append("## 🌡️ Market Regime\n")
         mode = regime.get('mode', 'UNKNOWN')
         emoji = "🟢" if mode == "OFFENSIVE" else "🔴"
         md.append(f"{emoji} **{mode}**")
-        if 'spy_return_5d' in regime:
-            md.append(f"- SPY 5-day return: {regime['spy_return_5d']:.2%}")
+
+        # Support both field names for SPY return
+        spy_return = regime.get('spy_5d_return', regime.get('spy_return_5d'))
+        if spy_return:
+            # Handle both float and string formats
+            if isinstance(spy_return, str):
+                md.append(f"- SPY 5-day return: {spy_return}")
+            else:
+                md.append(f"- SPY 5-day return: {spy_return:.2%}")
         md.append("")
 
     md.append("---")
