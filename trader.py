@@ -1261,6 +1261,33 @@ class JobDecisionLogger:
         logger.info(f"Summary: {summary['trades_executed']} trades executed out of {summary['total_symbols_analyzed']} symbols analyzed")
 
 
+def write_status_file(status: str, reason: str, filepath: str = "latest_decisions.json"):
+    """
+    Write a status-only file when trading cycle doesn't run.
+    Ensures artifact upload always has a file to upload.
+    """
+    status_log = {
+        "job_timestamp": datetime.now().isoformat(),
+        "status": status,
+        "reason": reason,
+        "market_regime": None,
+        "summary": {
+            "total_symbols_analyzed": 0,
+            "buys": 0,
+            "sells": 0,
+            "holds": 0,
+            "trades_executed": 0,
+            "executed_trades": []
+        },
+        "decisions": []
+    }
+
+    with open(filepath, 'w') as f:
+        json.dump(status_log, f, indent=2)
+
+    logger.info(f"Status file written to {filepath}: {status}")
+
+
 # =============================================================================
 # TRADE LOGGING
 # =============================================================================
@@ -1637,10 +1664,18 @@ def main():
     # Validate credentials before proceeding
     if not validate_credentials():
         logger.error("Credential validation failed. Exiting.")
+        write_status_file(
+            status="SKIPPED",
+            reason="Credential validation failed - check ALPACA_API_KEY and ALPACA_SECRET_KEY"
+        )
         return
 
     if not is_market_open():
         logger.warning("Market is not open. Skipping trading cycle.")
+        write_status_file(
+            status="SKIPPED",
+            reason="Market is currently closed - trading only occurs during market hours"
+        )
         return
 
     run_trading_cycle()
