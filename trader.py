@@ -1545,6 +1545,76 @@ def run_trading_cycle():
     logger.info("=" * 60)
 
 
+def validate_credentials() -> bool:
+    """
+    Validate that API credentials are set and working.
+    Returns True if valid, False otherwise.
+    """
+    # Check if environment variables are set
+    alpaca_key = os.getenv('ALPACA_API_KEY')
+    alpaca_secret = os.getenv('ALPACA_SECRET_KEY')
+    anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+
+    if not alpaca_key or not alpaca_secret:
+        logger.error("=" * 60)
+        logger.error("CONFIGURATION ERROR: Alpaca API credentials not found!")
+        logger.error("=" * 60)
+        logger.error("Missing environment variables:")
+        if not alpaca_key:
+            logger.error("  - ALPACA_API_KEY")
+        if not alpaca_secret:
+            logger.error("  - ALPACA_SECRET_KEY")
+        logger.error("")
+        logger.error("If running in GitHub Actions:")
+        logger.error("  1. Go to: Settings > Secrets and variables > Actions")
+        logger.error("  2. Add repository secrets:")
+        logger.error("     - ALPACA_API_KEY (your Alpaca API key)")
+        logger.error("     - ALPACA_SECRET_KEY (your Alpaca secret key)")
+        logger.error("     - ALPACA_PAPER (set to 'true' for paper trading)")
+        logger.error("     - ANTHROPIC_API_KEY (your Claude API key)")
+        logger.error("")
+        logger.error("If running locally:")
+        logger.error("  1. Copy .env.example to .env")
+        logger.error("  2. Fill in your API credentials")
+        logger.error("=" * 60)
+        return False
+
+    if not anthropic_key:
+        logger.warning("ANTHROPIC_API_KEY not set - AI analysis will fail")
+
+    # Test Alpaca credentials with a simple API call
+    try:
+        logger.info("Validating Alpaca API credentials...")
+        client = TradingClient(
+            api_key=alpaca_key,
+            secret_key=alpaca_secret,
+            paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
+        )
+        # Try to get account info - this will fail with 401 if creds are invalid
+        account = client.get_account()
+        logger.info(f"✓ Alpaca credentials validated (Account: {account.account_number})")
+        return True
+    except Exception as e:
+        logger.error("=" * 60)
+        logger.error("AUTHENTICATION ERROR: Failed to validate Alpaca credentials")
+        logger.error("=" * 60)
+        logger.error(f"Error: {e}")
+        logger.error("")
+        logger.error("Possible causes:")
+        logger.error("  1. API keys are invalid or expired")
+        logger.error("  2. API keys were regenerated (old keys revoked)")
+        logger.error("  3. Network connectivity issues")
+        logger.error("  4. Alpaca API service issues")
+        logger.error("")
+        logger.error("To fix:")
+        logger.error("  1. Log in to Alpaca dashboard: https://alpaca.markets/")
+        logger.error("  2. Go to: Your API Keys section")
+        logger.error("  3. Verify your keys or generate new ones")
+        logger.error("  4. Update the GitHub repository secrets with new keys")
+        logger.error("=" * 60)
+        return False
+
+
 def is_market_open() -> bool:
     """Check if the market is currently open using Alpaca's clock API."""
     try:
@@ -1563,6 +1633,11 @@ def is_market_open() -> bool:
 def main():
     """Main entry point."""
     logger.info("ClaudeTrader initialized")
+
+    # Validate credentials before proceeding
+    if not validate_credentials():
+        logger.error("Credential validation failed. Exiting.")
+        return
 
     if not is_market_open():
         logger.warning("Market is not open. Skipping trading cycle.")
