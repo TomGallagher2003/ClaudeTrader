@@ -1063,6 +1063,7 @@ class TradeExecutor:
             pos.symbol: {
                 "qty": float(pos.qty),
                 "market_value": float(pos.market_value),
+                "current_price": float(pos.current_price),
                 "avg_entry_price": float(pos.avg_entry_price),
                 "unrealized_pl": float(pos.unrealized_pl),
                 "unrealized_plpc": float(pos.unrealized_plpc)
@@ -1165,6 +1166,8 @@ class JobDecisionLogger:
         self.job_start = datetime.now().isoformat()
         self.regime_mode = None
         self.spy_return = None
+        self.account = {}
+        self.positions = {}
         self.decisions = []
         self.trades_executed = 0
 
@@ -1172,6 +1175,11 @@ class JobDecisionLogger:
         """Record the market regime for this job."""
         self.regime_mode = mode.value
         self.spy_return = spy_return
+
+    def set_portfolio(self, account: dict, positions: dict):
+        """Record portfolio snapshot for this job."""
+        self.account = account
+        self.positions = positions
 
     def log_decision(
         self,
@@ -1243,9 +1251,27 @@ class JobDecisionLogger:
             ]
         }
 
+        # Build positions list for summary display
+        positions_list = [
+            {
+                "symbol": sym,
+                "qty": int(data["qty"]),
+                "avg_entry_price": data["avg_entry_price"],
+                "current_price": data["current_price"],
+                "unrealized_plpc": data["unrealized_plpc"]
+            }
+            for sym, data in self.positions.items()
+        ]
+
         job_log = {
             "job_timestamp": self.job_start,
             "job_completed": datetime.now().isoformat(),
+            "portfolio": {
+                "equity": self.account.get("equity", 0),
+                "cash": self.account.get("cash", 0),
+                "buying_power": self.account.get("buying_power", 0)
+            },
+            "positions": positions_list,
             "market_regime": {
                 "mode": self.regime_mode,
                 "spy_5d_return": f"{self.spy_return:.2%}" if self.spy_return is not None else None
@@ -1428,6 +1454,7 @@ def run_trading_cycle():
     logger.info("Running portfolio optimization analysis")
     account = executor.get_account()
     positions = executor.get_positions()
+    job_logger.set_portfolio(account, positions)
 
     portfolio_analysis = portfolio_optimizer.analyze_portfolio_risk(
         positions, account["equity"]
