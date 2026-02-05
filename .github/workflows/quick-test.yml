@@ -1,0 +1,92 @@
+name: Quick Credential Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check if secrets exist
+        run: |
+          echo "=== Checking Repository Secrets ==="
+
+          if [ -n "$ALPACA_API_KEY" ]; then
+            echo "✅ ALPACA_API_KEY is set (length: ${#ALPACA_API_KEY} chars)"
+          else
+            echo "❌ ALPACA_API_KEY is NOT set"
+            exit 1
+          fi
+
+          if [ -n "$ALPACA_SECRET_KEY" ]; then
+            echo "✅ ALPACA_SECRET_KEY is set (length: ${#ALPACA_SECRET_KEY} chars)"
+          else
+            echo "❌ ALPACA_SECRET_KEY is NOT set"
+            exit 1
+          fi
+
+          if [ -n "$ALPACA_PAPER" ]; then
+            echo "✅ ALPACA_PAPER is set to: $ALPACA_PAPER"
+          else
+            echo "⚠️  ALPACA_PAPER is NOT set (will default to 'true')"
+          fi
+
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "✅ ANTHROPIC_API_KEY is set (length: ${#ANTHROPIC_API_KEY} chars)"
+          else
+            echo "❌ ANTHROPIC_API_KEY is NOT set"
+            exit 1
+          fi
+
+          echo "=== All required secrets are configured! ==="
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test Alpaca API connection
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python -c "
+          import os
+          from alpaca.trading.client import TradingClient
+
+          print('Testing Alpaca API credentials from GitHub Secrets...')
+
+          client = TradingClient(
+              api_key=os.getenv('ALPACA_API_KEY'),
+              secret_key=os.getenv('ALPACA_SECRET_KEY'),
+              paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
+          )
+
+          try:
+              account = client.get_account()
+              print(f'✅ Successfully authenticated!')
+              print(f'Account: {account.account_number}')
+              print(f'Equity: \${float(account.equity):,.2f}')
+              print(f'Cash: \${float(account.cash):,.2f}')
+
+              clock = client.get_clock()
+              print(f'Market is: {\"OPEN\" if clock.is_open else \"CLOSED\"}')
+          except Exception as e:
+              print(f'❌ Authentication failed: {e}')
+              exit(1)
+          "
